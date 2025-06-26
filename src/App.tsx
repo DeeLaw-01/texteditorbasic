@@ -1,18 +1,127 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import MockFileServer, { FileVersion } from './MockFileServer'
 import './App.css'
+
+// Command pattern for undo/redo operations
+type EditCommand = {
+  type: 'insert' | 'delete'
+  index: number
+  text: string
+}
 
 const App: React.FC = () => {
   // Core state
   const [text, setText] = useState<string>('')
-  const [history, setHistory] = useState<string[]>([])
-  const [redoStack, setRedoStack] = useState<string[]>([])
+  const [undoStack, setUndoStack] = useState<EditCommand[]>([])
+  const [redoStack, setRedoStack] = useState<EditCommand[]>([])
   const [versions, setVersions] = useState<FileVersion[]>([])
   const [actionMessage, setActionMessage] = useState<string>('')
   const [isMobile, setIsMobile] = useState<boolean>(false)
 
+  // Refs to track previous state for diff calculation
+  const previousTextRef = useRef<string>('')
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
   // Constants
-  const MAX_HISTORY_SIZE = 100
+  const MAX_HISTORY_SIZE = 1000 // Increased since commands are much smaller
+
+  // Update previous text ref whenever text changes
+  useEffect(() => {
+    previousTextRef.current = text
+  }, [text])
+
+  // Utility function to find the difference between two strings and create commands
+  const createEditCommands = (
+    oldText: string,
+    newText: string
+  ): EditCommand[] => {
+    if (oldText === newText) return []
+
+    // Find the first position where strings differ
+    let startIndex = 0
+    while (
+      startIndex < oldText.length &&
+      startIndex < newText.length &&
+      oldText[startIndex] === newText[startIndex]
+    ) {
+      startIndex++
+    }
+
+    // Find the last position where strings differ (working backwards)
+    let oldEndIndex = oldText.length
+    let newEndIndex = newText.length
+    while (
+      oldEndIndex > startIndex &&
+      newEndIndex > startIndex &&
+      oldText[oldEndIndex - 1] === newText[newEndIndex - 1]
+    ) {
+      oldEndIndex--
+      newEndIndex--
+    }
+
+    const commands: EditCommand[] = []
+
+    // If text was deleted
+    if (oldEndIndex > startIndex) {
+      const deletedText = oldText.substring(startIndex, oldEndIndex)
+      commands.push({
+        type: 'delete',
+        index: startIndex,
+        text: deletedText
+      })
+    }
+
+    // If text was inserted
+    if (newEndIndex > startIndex) {
+      const insertedText = newText.substring(startIndex, newEndIndex)
+      commands.push({
+        type: 'insert',
+        index: startIndex,
+        text: insertedText
+      })
+    }
+
+    return commands
+  }
+
+  // Apply a command to text
+  const applyCommand = (text: string, command: EditCommand): string => {
+    switch (command.type) {
+      case 'insert':
+        return (
+          text.slice(0, command.index) +
+          command.text +
+          text.slice(command.index)
+        )
+      case 'delete':
+        return (
+          text.slice(0, command.index) +
+          text.slice(command.index + command.text.length)
+        )
+      default:
+        return text
+    }
+  }
+
+  // Create inverse command
+  const createInverseCommand = (command: EditCommand): EditCommand => {
+    switch (command.type) {
+      case 'insert':
+        return {
+          type: 'delete',
+          index: command.index,
+          text: command.text
+        }
+      case 'delete':
+        return {
+          type: 'insert',
+          index: command.index,
+          text: command.text
+        }
+      default:
+        return command
+    }
+  }
 
   // Check if device is mobile
   useEffect(() => {
@@ -40,47 +149,87 @@ const App: React.FC = () => {
     }
   }, [actionMessage])
 
-  // Handle text change
+  // Handle text change with command-based tracking
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value
+    const oldText = previousTextRef.current
 
-    // Add current text to history before changing
-    if (text !== newText) {
-      setHistory(prev => {
-        const newHistory = [...prev, text]
-        // Limit history size
-        if (newHistory.length > MAX_HISTORY_SIZE) {
-          return newHistory.slice(-MAX_HISTORY_SIZE)
-        }
-        return newHistory
-      })
+    if (oldText !== newText) {
+      // Create commands for the change
+      const commands = createEditCommands(oldText, newText)
 
-      // Clear redo stack when new text is entered
-      setRedoStack([])
+      if (commands.length > 0) {
+        // Add commands to undo stack
+        setUndoStack(prev => {
+          const newUndoStack = [...prev, ...commands]
+          // Limit history size
+          if (newUndoStack.length > MAX_HISTORY_SIZE) {
+            return newUndoStack.slice(-MAX_HISTORY_SIZE)
+          }
+          return newUndoStack
+        })
+
+        // Clear redo stack when new text is entered
+        setRedoStack([])
+      }
     }
 
     setText(newText)
   }
 
-  // Undo function
+  // Undo function with command pattern
   const performUndo = useCallback(() => {
-    if (history.length > 0) {
-      const previousText = history[history.length - 1]
-      setHistory(prev => prev.slice(0, -1))
-      setRedoStack(prev => [...prev, text])
-      setText(previousText)
-      setActionMessage('Undo Performed')
-    }
-  }, [history, text])
+    if (undoStack.length > 0) {
+      const command = undoStack[undoStack.length - 1]
+      const inverseCommand = createInverseCommand(command)
 
-  // Redo function
+      // Apply inverse command
+      const newText = applyCommand(text, inverseCommand)
+
+      // Update stacks
+      setUndoStack(prev => prev.slice(0, -1))
+      setRedoStack(prev => [...prev, command])
+
+      setText(newText)
+      setActionMessage('Undo Performed')
+
+      // Update cursor position if possible
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.setSelectionRange(
+            inverseCommand.index,
+            inverseCommand.index
+          )
+        }
+      }, 0)
+    }
+  }, [undoStack, text])
+
+  // Redo function with command pattern
   const performRedo = useCallback(() => {
     if (redoStack.length > 0) {
-      const nextText = redoStack[redoStack.length - 1]
+      const command = redoStack[redoStack.length - 1]
+
+      // Apply command
+      const newText = applyCommand(text, command)
+
+      // Update stacks
       setRedoStack(prev => prev.slice(0, -1))
-      setHistory(prev => [...prev, text])
-      setText(nextText)
+      setUndoStack(prev => [...prev, command])
+
+      setText(newText)
       setActionMessage('Redo Performed')
+
+      // Update cursor position if possible
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const cursorPos =
+            command.type === 'insert'
+              ? command.index + command.text.length
+              : command.index
+          textareaRef.current.setSelectionRange(cursorPos, cursorPos)
+        }
+      }, 0)
     }
   }, [redoStack, text])
 
@@ -109,32 +258,39 @@ const App: React.FC = () => {
     setActionMessage('Version Saved')
   }
 
-  // Reset function (bonus feature)
+  // Reset function with command pattern
   const resetEditor = () => {
     setText('')
-    setHistory([])
+    setUndoStack([])
     setRedoStack([])
     setActionMessage('Editor Reset')
   }
 
-  // Load version back to editor
+  // Load version back to editor with command tracking
   const loadVersion = (version: FileVersion) => {
-    // Add current text to history before loading version
-    if (text !== version.content) {
-      setHistory(prev => {
-        const newHistory = [...prev, text]
-        // Limit history size
-        if (newHistory.length > MAX_HISTORY_SIZE) {
-          return newHistory.slice(-MAX_HISTORY_SIZE)
-        }
-        return newHistory
-      })
+    const oldText = text
+    const newText = version.content
 
-      // Clear redo stack when loading a version
-      setRedoStack([])
+    if (oldText !== newText) {
+      // Create commands for loading the version
+      const commands = createEditCommands(oldText, newText)
+
+      if (commands.length > 0) {
+        setUndoStack(prev => {
+          const newUndoStack = [...prev, ...commands]
+          // Limit history size
+          if (newUndoStack.length > MAX_HISTORY_SIZE) {
+            return newUndoStack.slice(-MAX_HISTORY_SIZE)
+          }
+          return newUndoStack
+        })
+
+        // Clear redo stack when loading a version
+        setRedoStack([])
+      }
     }
 
-    setText(version.content)
+    setText(newText)
     setActionMessage(`Version ${version.id} Loaded`)
   }
 
@@ -242,8 +398,8 @@ const App: React.FC = () => {
           <div style={buttonContainerStyle}>
             <button
               onClick={performUndo}
-              disabled={history.length === 0}
-              style={buttonStyle(history.length === 0, '#2196F3')}
+              disabled={undoStack.length === 0}
+              style={buttonStyle(undoStack.length === 0, '#2196F3')}
             >
               {isMobile ? 'Undo' : 'Undo (Ctrl+Z)'}
             </button>
@@ -263,6 +419,7 @@ const App: React.FC = () => {
           </div>
 
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={handleTextChange}
             placeholder={
@@ -281,7 +438,7 @@ const App: React.FC = () => {
               textAlign: isMobile ? 'center' : 'left'
             }}
           >
-            History: {history.length} | Redo Stack: {redoStack.length} |
+            Commands: {undoStack.length} | Redo Stack: {redoStack.length} |
             Characters: {text.length}
           </div>
         </div>
@@ -423,6 +580,19 @@ const App: React.FC = () => {
             <strong>Reset</strong> - Clear editor and history
           </li>
         </ul>
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '8px',
+            backgroundColor: '#e3f2fd',
+            borderRadius: '4px',
+            fontSize: isMobile ? '12px' : '14px'
+          }}
+        >
+          <strong>📈 Memory-Efficient:</strong> Now using command-based
+          undo/redo that tracks only changes, not full text snapshots. Perfect
+          for large legal documents!
+        </div>
       </div>
     </div>
   )
