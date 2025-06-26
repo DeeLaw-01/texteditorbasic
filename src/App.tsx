@@ -318,6 +318,7 @@ const App: React.FC = () => {
   }
 
   const editorSectionStyle = {
+    color: 'white',
     flex: isMobile ? 'none' : 1,
     order: isMobile ? 1 : 0
   }
@@ -383,7 +384,8 @@ const App: React.FC = () => {
         style={{
           fontSize: isMobile ? '24px' : '32px',
           textAlign: isMobile ? 'center' : 'left',
-          marginBottom: isMobile ? '15px' : '20px'
+          marginBottom: isMobile ? '15px' : '20px',
+          color: 'white'
         }}
       >
         Text Editor with Undo/Redo
@@ -434,7 +436,7 @@ const App: React.FC = () => {
             style={{
               marginTop: '10px',
               fontSize: isMobile ? '11px' : '12px',
-              color: '#666',
+              color: 'white',
               textAlign: isMobile ? 'center' : 'left'
             }}
           >
@@ -447,6 +449,7 @@ const App: React.FC = () => {
         <div style={versionHistoryStyle}>
           <h3
             style={{
+              color: 'white',
               fontSize: isMobile ? '18px' : '20px',
               textAlign: isMobile ? 'center' : 'left',
               marginBottom: isMobile ? '10px' : '15px'
